@@ -1,0 +1,7 @@
+nzip
+nzip.exe
+*.nzip
+models/*.bin
+__pycache__/
+*.pyc
+.venv/
