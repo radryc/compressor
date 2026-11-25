@@ -7,38 +7,21 @@ Generation 3 is a **deterministic, integer-only** codec. It is deliberately
 built for a hostile operational reality: archives must decode years later, on a
 different CPU architecture, from a different model version, after a retrain.
 
+```mermaid
+flowchart TB
+    raw["raw samples<br/>(spool)"]
+    subgraph control["control plane"]
+        direction LR
+        train["train<br/>(PyTorch or pure Go)"] --> eval["eval with codec"] --> publish["content-addressed publish"] --> promote["promote"]
+    end
+    subgraph data["data plane (Go, no deps)"]
+        direction LR
+        frames["NGR3 frames<br/>crc32c · model hash · keyframes"] --> model["integer GRU + match model<br/>+ bit-tree mixer"] --> coder["binary arithmetic coder<br/>parallel per block"]
+    end
+    raw --> train
+    control -->|"NGRM artifact (id + crc32c)"| data
+    streams["streams"] --> frames
 ```
-                 ┌──────────────── control plane ────────────────┐
- raw samples ───▶│ train (PyTorch or pure Go) → eval with codec  │
- (spool)         │ → content-addressed publish → promote         │
-                 └───────────────────────────────────────────────┘
-                                    │ NGRM artifact (id + crc32c)
-                                    ▼
-                 ┌──────────────── data plane (Go, no deps) ─────┐
- streams  ───────│ NGR3 frames: crc32c, model hash, keyframes   │
-                 │ integer GRU + match model + bit-tree mixer    │
-                 │ binary arithmetic coder, parallel per block   │
-                 └───────────────────────────────────────────────┘
-```
-
-## What changed from generation 1
-
-Generation 1 was not shippable. Every item below is now fixed and tested:
-
-| Problem | Status |
-| :--- | :--- |
-| CLI did not compile | fixed |
-| arm64 fuses `a*b+c` into FMA, amd64 does not → cross-architecture corruption | **integer-only codec**, verified bit-identical |
-| no checksums, corrupt archives decoded silently | crc32c per header and frame |
-| archives broke when a model id was retrained | stream records the model's content hash; decode verifies it |
-| hostile length fields caused 4 GiB allocations | hard caps validated before allocating |
-| ~0.05 MB/s per core | **~1.2 MB/s per core** at H=32 (~25×) |
-| 256-way softmax per byte | 8 binary bit heads (`8H` instead of `256H`) |
-| `log`/`exp` in the hot loop (~770 calls/byte) | integer LUTs, no transcendentals |
-| no way to use it on small batches | session mode, keyframes, dictionary priming |
-| order-1 only, lost to bzip2 | multi-length match, order-2 and run-length contexts |
-| no tests, no CI | unit, round-trip, corruption, truncation, hostile-input, fuzz |
-| drift monitor never wired | observer → EWMA drift monitor → CLI alerts |
 
 ## Quickstart
 
@@ -232,11 +215,3 @@ docs/              wire format, design notes, training guidance
 * [docs/architecture.md](docs/architecture.md) — components, profiles,
   determinism, measured results and the experiments that were rejected
 * [docs/training-otel-json.md](docs/training-otel-json.md) — building a corpus
-
-## Status
-
-Phases 0–5 of the hardening roadmap are implemented: correctness and
-robustness, ablation harness, integer/SIMD codec, NGR3 format with resumable
-sessions, and the sample→train→gate→publish loop. Transport integration with the
-OTel ingest tier is intentionally **not** included yet; `stream.Writer` and
-`stream.Reader` are the seam it will use.
